@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crack Detector Camera</title>
+<style>
+  body{font-family:Arial,sans-serif;margin:0;padding:16px;text-align:center;background:#111;color:#eee}
+  button{font-size:18px;padding:10px 24px;margin:8px}
+  #wrap{position:relative;display:inline-block;max-width:100%}
+  #webcam-container canvas{max-width:100%;height:auto}
+  #alert{display:none;position:absolute;left:0;right:0;bottom:0;background:rgba(208,0,0,.92);color:#fff;font:bold 30px Arial;padding:14px}
+  #ok{display:none;position:absolute;left:0;right:0;bottom:0;background:rgba(0,140,60,.9);color:#fff;font:bold 24px Arial;padding:10px}
+  #label-container div{font-size:14px;margin:2px}
+</style>
+</head>
+<body>
+<h2>Crack Detector</h2>
+<button id="start" onclick="init()">Start camera</button>
+<div id="status"></div>
+<div id="wrap">
+  <div id="webcam-container"></div>
+  <div id="alert">⚠ CRACK DETECTED</div>
+  <div id="ok">No crack</div>
+</div>
+<div id="label-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+<script>
+  // Folder with the files exported from Teachable Machine (Image Project)
+  // Either edit the default below, or open the page as  camera.html?model=https://teachablemachine.withgoogle.com/models/XXXX/
+  let MODEL_URL = new URLSearchParams(location.search).get("model") || "https://teachablemachine.withgoogle.com/models/6Z5BJIT7Vp/";
+  if (!MODEL_URL.endsWith("/")) MODEL_URL += "/";
+  // Class name (or part of it) that means "crack", and the confidence needed
+  // Your model's classes are currently named "Class 1" and "Class 2"; Class 1 is treated as the crack class.
+  // Override with ?crack=class 2  (or rename the classes in Teachable Machine and re-upload).
+  const CRACK_CLASS = (new URLSearchParams(location.search).get("crack") || "class 1").toLowerCase();
+  const THRESHOLD = 0.8;
+
+  let model, webcam, labelContainer, maxPredictions, alerting = false, cameraOn = false;
+
+  function speak(t){
+    if (window.speechSynthesis){ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }
+  }
+
+  async function init(){
+    const status = document.getElementById("status");
+    document.getElementById("start").style.display = "none";
+    if (location.protocol === "file:") {
+      status.textContent = "Open this page via http://localhost (run: python -m http.server) - cameras are blocked on file:// pages.";
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      status.textContent = "Camera API unavailable. Use http://localhost or https:// in Chrome/Edge.";
+      return;
+    }
+    // 1) Camera first, so it shows even if the model is missing
+    try{
+      status.textContent = "Starting camera...";
+      webcam = new tmImage.Webcam(400, 400, false);   // no mirroring: it's a pic, not a selfie
+      try { await webcam.setup({ facingMode: "environment" }); }
+      catch (e1) { webcam = new tmImage.Webcam(400, 400, false); await webcam.setup(); } // any camera
+      await webcam.play();
+      document.getElementById("webcam-container").appendChild(webcam.canvas);
+      cameraOn = true;
+      window.requestAnimationFrame(loop);
+    }catch(e){
+      status.textContent = "Camera error: " + (e && e.name ? e.name + " " : "") + (e && e.message ? e.message : String(e)) + " (tap Retry camera, then Allow; close other apps using the camera)";
+      document.getElementById("start").textContent = "Retry camera";
+      document.getElementById("start").style.display = "";
+      return;
+    }
+    // 2) Then the model
+    try{
+      status.textContent = "Loading model...";
+      model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
+      maxPredictions = model.getTotalClasses();
+      labelContainer = document.getElementById("label-container");
+      for (let i = 0; i < maxPredictions; i++) labelContainer.appendChild(document.createElement("div"));
+      status.textContent = "Hold a picture in front of the camera";
+    }catch(e){
+      status.textContent = "Camera is on, but model failed to load from " + MODEL_URL + " - put model.json, metadata.json and weights.bin there. (" + e.message + ")";
+    }
+  }
+
+  // Start the camera automatically when the page opens
+  // (iPhone Safari may need a tap: the button reappears with "Retry camera" if auto-start is blocked)
+  window.addEventListener("load", init);
+
+  async function loop(){
+    webcam.update();
+    if (model) await predict();
+    window.requestAnimationFrame(loop);
+  }
+
+  async function predict(){
+    const prediction = await model.predict(webcam.canvas);
+    for (let i = 0; i < maxPredictions; i++){
+      labelContainer.childNodes[i].textContent =
+        prediction[i].className + ": " + prediction[i].probability.toFixed(2);
+    }
+    const hit = prediction.some(p => p.className.toLowerCase().includes(CRACK_CLASS) && p.probability >= THRESHOLD);
+    document.getElementById("alert").style.display = hit ? "block" : "none";
+    document.getElementById("ok").style.display = hit ? "none" : "block";
+    if (hit && !alerting) speak("Crack detected");
+    alerting = hit;
+  }
+</script>
+</body>
+</html>
